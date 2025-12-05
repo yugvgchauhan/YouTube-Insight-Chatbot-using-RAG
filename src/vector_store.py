@@ -114,25 +114,40 @@ class VectorStoreManager:
         except:
             return None
     
-    def get_retriever(self, k: int = None):
+    def get_retriever(
+        self,
+        k: int = None,
+        search_type: str = "similarity",
+        search_kwargs: Optional[dict] = None,
+    ):
         """
         Get retriever from vector store.
         
         Args:
             k: Number of documents to retrieve (default from config)
+            search_type: Retrieval strategy ('similarity' or 'mmr')
+            search_kwargs: Additional search kwargs for the retriever
             
         Returns:
             Retriever instance
         """
         if self.vector_store is None:
             raise ValueError("Vector store not initialized. Create or load it first.")
-        
+
         if k is None:
             k = config.RETRIEVAL_K
-        
+
+        # Default search kwargs
+        if search_kwargs is None:
+            if search_type == "mmr":
+                # fetch_k should be >= k for MMR; use a simple multiple
+                search_kwargs = {"k": k, "fetch_k": max(k * 4, k)}
+            else:
+                search_kwargs = {"k": k}
+
         return self.vector_store.as_retriever(
-            search_type="similarity",
-            search_kwargs={'k': k}
+            search_type=search_type,
+            search_kwargs=search_kwargs,
         )
     
     def delete_vector_store(self):

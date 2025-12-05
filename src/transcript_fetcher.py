@@ -2,7 +2,11 @@
 YouTube Transcript Fetcher Module
 """
 from typing import Optional, List
-from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
+from youtube_transcript_api import (
+    YouTubeTranscriptApi,
+    TranscriptsDisabled,
+    NoTranscriptFound,
+)
 from src.utils import extract_video_id, validate_video_id
 
 
@@ -12,21 +16,32 @@ class TranscriptFetcher:
     def __init__(self):
         # Use an instance of the client; older releases expose list/fetch on instances.
         self.api = YouTubeTranscriptApi()
-    
-    def fetch_transcript(self, url_or_id: str, language_codes: List[str] = None) -> Optional[str]:
+
+    def fetch_transcript(
+        self,
+        url_or_id: str,
+        language_codes: Optional[List[str]] = None,
+        target_language: Optional[str] = None,
+    ) -> Optional[str]:
         """
         Fetch transcript from YouTube video.
-        
+
+        This follows the usage pattern from the official youtube-transcript-api
+        documentation: first retrieve the available transcripts via .list(),
+        then pick/translate the best match.
+
         Args:
             url_or_id: YouTube URL or video ID
-            language_codes: Preferred language codes (default: ['en'])
-            
+            language_codes: Preferred language codes ordered by preference
+            target_language: Optional language code to translate the transcript to
+
         Returns:
             Transcript text as a single string, or None if failed
         """
+        # If no language preference provided, default to English preference
         if language_codes is None:
-            language_codes = ['en']
-        
+            language_codes = ["en"]
+
         # Extract video ID from URL
         video_id = extract_video_id(url_or_id)
         
@@ -37,27 +52,58 @@ class TranscriptFetcher:
             raise ValueError(f"Invalid video ID format: {video_id}")
         
         try:
-            # Try to get transcript in preferred languages
+            # Retrieve the available transcripts
             transcript_list = self.api.list(video_id)
-            
-            # Try to get transcript in preferred language
+
             transcript = None
-            for lang_code in language_codes:
+
+            # 1) Try to directly filter for preferred languages
+            try:
+                transcript = transcript_list.find_transcript(language_codes)
+            except NoTranscriptFound:
+                transcript = None
+
+            # 2) If none found, try manually created transcripts
+            if transcript is None:
                 try:
-                    transcript = transcript_list.find_transcript([lang_code])
-                    break
+                    transcript = transcript_list.find_manually_created_transcript(
+                        language_codes
+                    )
                 except NoTranscriptFound:
-                    continue
-            
-            # If no preferred language found, try to get any available transcript
+                    transcript = None
+
+            # 3) If still none, try automatically generated ones
             if transcript is None:
-                transcript = transcript_list.find_manually_created_transcript(language_codes)
-            
-            # If still no transcript, get the first available one
+                try:
+                    transcript = transcript_list.find_generated_transcript(
+                        language_codes
+                    )
+                except NoTranscriptFound:
+                    transcript = None
+
+            # 4) As a very last resort, just take the first available transcript
             if transcript is None:
-                transcript = transcript_list.find_generated_transcript(language_codes)
-            
-            # Fetch the transcript
+                try:
+                    transcript = next(iter(transcript_list))
+                except StopIteration:
+                    transcript = None
+
+            if transcript is None:
+                raise NoTranscriptFound(video_id)
+
+            # Optionally translate the transcript to the target language
+            if (
+                target_language
+                and getattr(transcript, "is_translatable", False)
+                and target_language != getattr(transcript, "language_code", None)
+            ):
+                try:
+                    transcript = transcript.translate(target_language)
+                except Exception:
+                    # If translation fails, fall back to the original transcript
+                    pass
+
+            # Fetch the actual transcript data
             transcript_data = transcript.fetch()
             
             # Combine all transcript snippets into a single string. Depending on
@@ -73,7 +119,7 @@ class TranscriptFetcher:
                     transcript_parts.append(text.strip())
             
             transcript_text = " ".join(transcript_parts)
-            
+
             return transcript_text
             
         except TranscriptsDisabled:
